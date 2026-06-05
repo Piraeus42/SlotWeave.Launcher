@@ -1,0 +1,48 @@
+{
+  "repositories": [
+    {
+      "id": "slotweave",
+      "owner": "Piraeus42",
+      "repo": "SlotWeave",
+      "displayName": "SlotWeave Framework",
+      "installPath": "SlotWeave",
+      "isCore": true,
+      "manifestFile": "SlotWeave/version.json",
+      "assetPattern": "SlotWeave.zip",
+      "gameFiles": [
+        "winmm.dll",
+        "SlotWeave/"
+      ]
+    },
+    {
+      "id": "betterlandlord",
+      "owner": "Piraeus42",
+      "repo": "BetterLandlord",
+      "displayName": "Better Landlord",
+      "installPath": "SlotWeave/mods/Piraeus.BetterLandlord",
+      "isCore": false,
+      "manifestFile": "SlotWeave/mods/Piraeus.BetterLandlord/version.json",
+      "assetPattern": "BetterLandlord-v*.zip",
+      "dependsOn": "slotweave"
+    }
+  ],
+  "gameExecutable": "Luck be a Landlord.exe",
+  "gameDirectoryPaths": [
+    "D:/steam/steamapps/common/Luck be a Landlord"
+  ],
+  "steamAppId": null,
+  "cacheDirectories": [
+    "SlotWeave/logs",
+    "SlotWeave/cache"
+  ],
+  "backupDirectory": ".slotweave_launcher/backups",
+  "tempDirectory": ".slotweave_launcher/temp",
+  "maxBackups": 3,
+  "downloadTimeoutSeconds": 300,
+  "launcherVersion": "1.0.0",
+  "launcherRepo": {
+    "owner": "Piraeus42",
+    "repo": "SlotWeave.Launcher",
+    "assetPattern": "SlotWeave.Launcher.exe"
+  }
+}
