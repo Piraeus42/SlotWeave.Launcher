@@ -90,7 +90,8 @@ public class SelfUpdater
                     line += ProgressBar.BuildIndeterminate((int)(received % 100));
                 }
                 Console.Write(line);
-            });
+            },
+            mirrors: _config.DownloadMirrors);
 
         if (!success)
         {

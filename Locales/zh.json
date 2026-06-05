@@ -32,6 +32,7 @@
   "status.checking_updates": "正在检查更新...",
   "status.refreshing": "正在刷新...",
   "status.downloading": "⏬ 下载中...",
+  "status.trying_mirror": "⏬ 尝试镜像 {0}...",
   "status.download_complete": "下载完成 ({0})",
   "status.verifying_zip": "🔍 验证压缩包完整性...",
   "status.zip_ok": "验证通过",

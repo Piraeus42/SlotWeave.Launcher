@@ -34,6 +34,9 @@ public class LauncherConfig
     [JsonPropertyName("downloadTimeoutSeconds")]
     public int DownloadTimeoutSeconds { get; set; } = 300;
 
+    [JsonPropertyName("downloadMirrors")]
+    public List<string> DownloadMirrors { get; set; } = new();
+
     [JsonPropertyName("launcherVersion")]
     public string LauncherVersion { get; set; } = "1.0.0";
 

@@ -73,56 +73,79 @@ public class GitHubService
         string downloadUrl,
         string destinationPath,
         Action<long, long>? progressCallback = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        List<string>? mirrors = null)
     {
-        try
+        // Build URL list: direct first, then mirrors
+        var urls = new List<string> { downloadUrl };
+        if (mirrors != null)
         {
-            var dir = Path.GetDirectoryName(destinationPath);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
-
-            using var response = await _http.GetAsync(downloadUrl,
-                HttpCompletionOption.ResponseHeadersRead, ct);
-
-            if (!response.IsSuccessStatusCode)
+            foreach (var mirror in mirrors)
             {
-                ConsoleUI.ShowError(Loc.T("error.http_failed", (int)response.StatusCode));
+                var mirrorUrl = mirror.TrimEnd('/') + "/" + downloadUrl;
+                if (!urls.Contains(mirrorUrl))
+                    urls.Add(mirrorUrl);
+            }
+        }
+
+        for (int i = 0; i < urls.Count; i++)
+        {
+            var url = urls[i];
+            if (i > 0)
+            {
+                Console.Write($"\r{Loc.T("status.trying_mirror", i)} ");
+                progressCallback?.Invoke(0, -1);
+            }
+
+            try
+            {
+                var dir = Path.GetDirectoryName(destinationPath);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+
+                using var response = await _http.GetAsync(url,
+                    HttpCompletionOption.ResponseHeadersRead, ct);
+
+                if (!response.IsSuccessStatusCode)
+                    continue;
+
+                var totalBytes = response.Content.Headers.ContentLength ?? -1;
+                await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
+                await using var fileStream = new FileStream(destinationPath, FileMode.Create,
+                    FileAccess.Write, FileShare.None, bufferSize: 8192, useAsync: true);
+
+                var buffer = new byte[8192];
+                long totalRead = 0;
+                int bytesRead;
+
+                while ((bytesRead = await contentStream.ReadAsync(buffer, ct)) > 0)
+                {
+                    await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
+                    totalRead += bytesRead;
+                    progressCallback?.Invoke(totalRead, totalBytes);
+                }
+
+                if (totalBytes < 0)
+                    progressCallback?.Invoke(totalRead, totalRead);
+
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                ConsoleUI.ShowInfo(Loc.T("error.download_cancelled"));
+                TryDelete(destinationPath);
                 return false;
             }
-
-            var totalBytes = response.Content.Headers.ContentLength ?? -1;
-            await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
-            await using var fileStream = new FileStream(destinationPath, FileMode.Create,
-                FileAccess.Write, FileShare.None, bufferSize: 8192, useAsync: true);
-
-            var buffer = new byte[8192];
-            long totalRead = 0;
-            int bytesRead;
-
-            while ((bytesRead = await contentStream.ReadAsync(buffer, ct)) > 0)
+            catch (Exception)
             {
-                await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
-                totalRead += bytesRead;
-                progressCallback?.Invoke(totalRead, totalBytes);
+                // Try next mirror
             }
+        }
 
-            if (totalBytes < 0)
-                progressCallback?.Invoke(totalRead, totalRead);
-
-            return true;
-        }
-        catch (OperationCanceledException)
-        {
-            ConsoleUI.ShowInfo(Loc.T("error.download_cancelled"));
-            TryDelete(destinationPath);
-            return false;
-        }
-        catch (Exception ex)
-        {
-            ConsoleUI.ShowError(Loc.T("error.download_error", ex.Message));
-            TryDelete(destinationPath);
-            return false;
-        }
+        // All mirrors exhausted
+        ConsoleUI.ShowError(Loc.T("error.download_failed"));
+        TryDelete(destinationPath);
+        return false;
     }
 
     private static void TryDelete(string path)

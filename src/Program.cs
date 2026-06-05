@@ -224,6 +224,11 @@ class Program
             TempDirectory = ".slotweave_launcher/temp",
             MaxBackups = 3,
             DownloadTimeoutSeconds = 300,
+            DownloadMirrors = new List<string>
+            {
+                "https://ghproxy.com/",
+                "https://mirror.ghproxy.com/"
+            },
             LauncherVersion = "1.0.0",
             LauncherRepo = new LauncherRepoInfo
             {

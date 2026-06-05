@@ -40,6 +40,10 @@
   "maxBackups": 3,
   "downloadTimeoutSeconds": 300,
   "launcherVersion": "1.0.0",
+  "downloadMirrors": [
+    "https://ghproxy.com/",
+    "https://mirror.ghproxy.com/"
+  ],
   "launcherRepo": {
     "owner": "Piraeus42",
     "repo": "SlotWeave.Launcher",

@@ -192,7 +192,9 @@ public class Installer
                 _lastProgressLineLength = GetVisualLength(line);
 
                 Console.Write(line);
-            }, ct);
+            },
+            ct,
+            mirrors: _config.DownloadMirrors);
     }
 
     private static int GetVisualLength(string s)

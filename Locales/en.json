@@ -32,6 +32,7 @@
   "status.checking_updates": "Checking for updates...",
   "status.refreshing": "Refreshing...",
   "status.downloading": "⏬ Downloading...",
+  "status.trying_mirror": "⏬ Trying mirror {0}...",
   "status.download_complete": "Download complete ({0})",
   "status.verifying_zip": "🔍 Verifying archive integrity...",
   "status.zip_ok": "Verification passed",
