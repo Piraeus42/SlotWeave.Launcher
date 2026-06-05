@@ -18,6 +18,9 @@ class Program
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.Title = "SlotWeave Launcher";
 
+        // Clean up any leftover .new from a failed self-update
+        CompletePendingUpdate();
+
         try
         {
             // Load configuration
@@ -26,17 +29,17 @@ class Program
 
             ConsoleUI.SetVersion(config.LauncherVersion);
 
-            var launcherDir = Path.GetDirectoryName(configPath)
-                ?? Environment.CurrentDirectory;
+            var exeDir = GetExeDir();
+            var dataDir = GetDataDir();
 
             // Initialize localization: check cache or show language picker
-            var loc = await LocalizationService.InitializeAsync(launcherDir);
+            var loc = await LocalizationService.InitializeAsync(dataDir);
             if (loc == null)
             {
                 // First launch — show banner, then language picker
                 ShowMinimalBanner(config.LauncherVersion);
                 var lang = LocalizationService.ShowLanguagePicker();
-                InitializeLanguage(launcherDir, lang);
+                InitializeLanguage(dataDir, lang);
             }
 
             // Create services
@@ -44,12 +47,12 @@ class Program
             httpClient.Timeout = TimeSpan.FromSeconds(config.DownloadTimeoutSeconds);
 
             var githubService = new GitHubService(httpClient);
-            var detector = new GameDetector(config, launcherDir);
+            var detector = new GameDetector(config, exeDir);
             var scanner = new ComponentScanner(config);
             var cacheManager = new CacheManager(config);
             var installer = new Installer(githubService, scanner, cacheManager, config);
             var uninstaller = new Uninstaller(cacheManager, config);
-            var selfUpdater = new SelfUpdater(githubService, config, launcherDir);
+            var selfUpdater = new SelfUpdater(githubService, config, exeDir);
 
             // Create menu controller
             var menu = new MenuController(
@@ -108,21 +111,61 @@ class Program
     /// <summary>
     /// Find the launcher_config.json file.
     /// </summary>
-    private static string FindConfigFile()
+    /// <summary>
+    /// If a .new file exists from a previous self-update, complete the replacement.
+    /// </summary>
+    private static void CompletePendingUpdate()
     {
-        // Use the actual exe directory (not extraction temp in single-file mode)
-        var exeDir = Path.GetDirectoryName(Environment.ProcessPath)
+        try
+        {
+            var exePath = Environment.ProcessPath;
+            if (exePath == null) return;
+            var newPath = exePath + ".new";
+            if (!File.Exists(newPath)) return;
+
+            // Delete current exe and rename .new in its place, then restart
+            var batPath = exePath + ".cleanup.bat";
+            var script = $"""
+@echo off
+timeout /t 1 /nobreak >nul
+:retry
+del /f /q "{exePath}" 2>nul
+if exist "{exePath}" goto retry
+move /y "{newPath}" "{exePath}" 2>nul
+start "" "{exePath}"
+del /f /q "%~f0" 2>nul
+""";
+            File.WriteAllText(batPath, script, System.Text.Encoding.ASCII);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = batPath,
+                UseShellExecute = true,
+                CreateNoWindow = true
+            });
+            Environment.Exit(0);
+        }
+        catch { /* best effort */ }
+    }
+
+    private static string GetExeDir()
+        => Path.GetDirectoryName(Environment.ProcessPath)
             ?? AppContext.BaseDirectory;
 
-        var configPath = Path.Combine(exeDir, "launcher_config.json");
-        if (File.Exists(configPath))
-            return configPath;
+    private static string GetDataDir()
+    {
+        var dir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "SlotWeave.Launcher");
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
 
-        configPath = Path.Combine(Environment.CurrentDirectory, "launcher_config.json");
-        if (File.Exists(configPath))
-            return configPath;
-
-        return Path.Combine(exeDir, "launcher_config.json");
+    private static string FindConfigFile()
+    {
+        // Config lives in %APPDATA% for portability — zero loose files next to exe
+        var dataDir = GetDataDir();
+        var configPath = Path.Combine(dataDir, "launcher_config.json");
+        return configPath;
     }
 
     /// <summary>

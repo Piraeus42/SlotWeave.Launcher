@@ -13,8 +13,7 @@ public class LocalizationService
         "LocalizationService not initialized. Call InitializeAsync first.");
 
     private Dictionary<string, string> _strings = new(StringComparer.OrdinalIgnoreCase);
-    private string _launcherDir = string.Empty;
-    private string _settingsDir = string.Empty;
+    private string _dataDir = string.Empty;
 
     public string CurrentLanguage { get; private set; } = "en";
 
@@ -24,12 +23,11 @@ public class LocalizationService
     /// Initialize the localization service. If a cached language exists, load it.
     /// Otherwise returns null to signal that language selection is needed.
     /// </summary>
-    public static async Task<LocalizationService?> InitializeAsync(string launcherDir)
+    public static async Task<LocalizationService?> InitializeAsync(string dataDir)
     {
-        var service = new LocalizationService { _launcherDir = launcherDir };
-        service._settingsDir = Path.Combine(launcherDir, ".slotweave_launcher");
+        var service = new LocalizationService { _dataDir = dataDir };
 
-        var cached = LoadCachedLanguage(launcherDir);
+        var cached = LoadCachedLanguage(dataDir);
         if (cached != null)
         {
             service.CurrentLanguage = cached;
@@ -55,10 +53,9 @@ public class LocalizationService
     /// <summary>
     /// First-launch initialization: set language, save, and register as singleton.
     /// </summary>
-    public void SetLanguageForFirstLaunch(string launcherDir, string lang)
+    public void SetLanguageForFirstLaunch(string dataDir, string lang)
     {
-        _launcherDir = launcherDir;
-        _settingsDir = Path.Combine(launcherDir, ".slotweave_launcher");
+        _dataDir = dataDir;
         CurrentLanguage = lang;
         LoadLocale(lang);
         SaveLanguage();
@@ -147,7 +144,6 @@ public class LocalizationService
         {
             var candidates = new[]
             {
-                Path.Combine(_launcherDir, "Locales", $"{lang}.json"),
                 Path.Combine(AppContext.BaseDirectory, "Locales", $"{lang}.json"),
                 Path.Combine(Environment.CurrentDirectory, "Locales", $"{lang}.json"),
             };
@@ -233,29 +229,25 @@ public class LocalizationService
     {
         try
         {
-            if (!Directory.Exists(_settingsDir))
-                Directory.CreateDirectory(_settingsDir);
-
-            var settingsPath = Path.Combine(_settingsDir, "settings.json");
+            var settingsPath = Path.Combine(_dataDir, "settings.json");
             var settings = new Dictionary<string, string>
             {
-                ["language"] = CurrentLanguage,
-                ["first_launch_completed"] = "true"
+                ["language"] = CurrentLanguage
             };
             var json = JsonSerializer.Serialize(settings);
             File.WriteAllText(settingsPath, json);
         }
         catch
         {
-            // Best effort — language selection still works for this session
+            // Best effort
         }
     }
 
-    private static string? LoadCachedLanguage(string launcherDir)
+    private static string? LoadCachedLanguage(string dataDir)
     {
         try
         {
-            var settingsPath = Path.Combine(launcherDir, ".slotweave_launcher", "settings.json");
+            var settingsPath = Path.Combine(dataDir, "settings.json");
             if (!File.Exists(settingsPath))
                 return null;
 
@@ -267,10 +259,7 @@ public class LocalizationService
                 return lang;
             }
         }
-        catch
-        {
-            // Corrupted or missing — treat as first launch
-        }
+        catch { }
         return null;
     }
 }

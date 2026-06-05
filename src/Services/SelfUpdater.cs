@@ -138,18 +138,14 @@ public class SelfUpdater
 @echo off
 title SlotWeave Launcher Update
 echo Updating SlotWeave Launcher...
-timeout /t 2 /nobreak >nul
+:retry
+timeout /t 1 /nobreak >nul
 del /f /q "{currentExe}" 2>nul
+if exist "{currentExe}" goto retry
 move /y "{newExe}" "{currentExe}" 2>nul
 if exist "{currentExe}" (
-    echo Update complete. Restarting...
+    echo Done.
     start "" "{currentExe}"
-) else (
-    echo Update failed. Please manually rename:
-    echo   {newExe}
-    echo   to
-    echo   {currentExe}
-    pause
 )
 del /f /q "%~f0" 2>nul
 """;
