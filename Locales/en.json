@@ -98,6 +98,10 @@
   "warn.core_uninstall": "Warning: Uninstalling SlotWeave Framework will also remove all mods!",
   "warn.continue_confirm": "Continue? [Y/N]: ",
   "warn.continue_without_backup": "Continue without backup? [Y/N]: ",
+  "warn.av_blocked_file": "⚠ {0} may have been blocked by antivirus. Add {0} to exclusion list and reinstall.",
+  "warn.av_blocked_dir": "⚠ {0} directory may have been blocked. Add {0} to AV exclusions.",
+  "warn.winmm_embed_failed": "⚠ Failed to write winmm.dll: {0}",
+  "warn.winmm_missing": "✗ winmm.dll is missing! Add winmm.dll to your antivirus exclusion list and reinstall.",
 
   "info.cancelled": "Uninstall cancelled",
   "info.updates_available": "{0} update(s) available",

@@ -98,6 +98,10 @@
   "warn.core_uninstall": "警告: 卸载 SlotWeave 框架将同时移除所有模组！",
   "warn.continue_confirm": "确定继续？[Y/N]: ",
   "warn.continue_without_backup": "是否继续卸载（跳过备份）？[Y/N]: ",
+  "warn.av_blocked_file": "⚠ {0} 可能被杀毒软件拦截，请将 {0} 加入杀软白名单后重新安装",
+  "warn.av_blocked_dir": "⚠ {0} 目录可能被拦截，请将 {0} 加入杀软白名单",
+  "warn.winmm_embed_failed": "⚠ 写入 winmm.dll 失败: {0}",
+  "warn.winmm_missing": "✗ winmm.dll 缺失！请将 winmm.dll 加入杀毒软件白名单后重新安装",
 
   "info.cancelled": "已取消卸载",
   "info.updates_available": "发现 {0} 个可用更新",

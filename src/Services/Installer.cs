@@ -126,6 +126,13 @@ public class Installer
             CopyDirectory(sourceDir, targetDir, overwrite: true);
 
             ConsoleUI.ShowSuccess(Loc.T("status.files_installed"));
+
+            // Write winmm.dll from embedded copy (AV-safe, not from zip)
+            if (definition.IsCore)
+                WriteEmbeddedWinmmDll();
+
+            // Verify critical files survived
+            VerifyCriticalFiles(definition);
         }
         catch (Exception ex)
         {
@@ -400,6 +407,51 @@ public class Installer
                 Directory.Delete(tempDir, true);
         }
         catch { /* best effort */ }
+    }
+
+    /// <summary>
+    /// Write winmm.dll directly from embedded resource, bypassing zip extraction.
+    /// This avoids AV interception that can happen during zip-based extraction.
+    /// </summary>
+    private void WriteEmbeddedWinmmDll()
+    {
+        try
+        {
+            var target = Path.Combine(_gameDir!, "winmm.dll");
+            var assembly = typeof(Installer).Assembly;
+            const string resourceName = "SlotWeave.Launcher.Resources.winmm.dll";
+
+            using var stream = assembly.GetManifestResourceStream(resourceName);
+            if (stream == null) return; // Not embedded (dev build without Resources/)
+
+            using var fs = new FileStream(target, FileMode.Create, FileAccess.Write);
+            stream.CopyTo(fs);
+        }
+        catch (Exception ex)
+        {
+            ConsoleUI.ShowWarning(Loc.T("warn.winmm_embed_failed", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// After extraction, check that critical files weren't eaten by antivirus.
+    /// </summary>
+    private void VerifyCriticalFiles(ComponentDefinition definition)
+    {
+        foreach (var file in definition.GameFiles)
+        {
+            var path = Path.Combine(_gameDir!, file.TrimEnd('/', '\\'));
+            if (file.EndsWith('/') || file.EndsWith('\\'))
+            {
+                if (!Directory.Exists(path))
+                    ConsoleUI.ShowWarning(Loc.T("warn.av_blocked_dir", file));
+            }
+            else
+            {
+                if (!File.Exists(path))
+                    ConsoleUI.ShowWarning(Loc.T("warn.av_blocked_file", file));
+            }
+        }
     }
 
     private static string FormatSize(long bytes)

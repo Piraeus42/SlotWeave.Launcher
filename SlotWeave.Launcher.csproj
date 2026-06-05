@@ -22,6 +22,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- winmm.dll embedded for AV-resilient deployment -->
+    <EmbeddedResource Include="Resources\winmm.dll">
+      <LogicalName>SlotWeave.Launcher.Resources.winmm.dll</LogicalName>
+    </EmbeddedResource>
+
     <!-- Config auto-generated on first run from built-in defaults -->
 
     <!-- Locale files embedded into the assembly for true single-file -->

@@ -104,6 +104,10 @@ public class MenuController
                     ConsoleUI.ShowInfo(status);
             }
 
+            // Check if winmm.dll was eaten by antivirus
+            if (_gameDir != null && !File.Exists(Path.Combine(_gameDir, "winmm.dll")))
+                ConsoleUI.ShowError(Loc.T("warn.winmm_missing"));
+
             // Phase 4: Check GitHub for updates
             Console.WriteLine();
             await CheckForUpdatesAsync();
