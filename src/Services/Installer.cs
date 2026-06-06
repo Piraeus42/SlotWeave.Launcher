@@ -131,8 +131,26 @@ public class Installer
             if (definition.IsCore)
                 WriteEmbeddedWinmmDll();
 
-            // Verify critical files survived
-            VerifyCriticalFiles(definition);
+            // Verify critical files survived — BLOCKING on failure
+            var verifyResult = VerifyCriticalFiles(definition);
+            if (!verifyResult.IsSuccess)
+            {
+                ConsoleUI.ShowError(verifyResult.Error!);
+                ConsoleUI.ShowWarning(isUpdate
+                    ? Loc.T("status.rolling_back")
+                    : "Cleaning up...");
+
+                if (isUpdate)
+                {
+                    if (RestoreBackup(definition))
+                        ConsoleUI.ShowSuccess(Loc.T("status.rollback_ok"));
+                    else
+                        ConsoleUI.ShowError(Loc.T("error.rollback_failed"));
+                }
+
+                CleanupTemp(tempDir);
+                return false;
+            }
         }
         catch (Exception ex)
         {
@@ -434,24 +452,36 @@ public class Installer
     }
 
     /// <summary>
-    /// After extraction, check that critical files weren't eaten by antivirus.
+    /// After extraction, verify every file in GameFiles exists on disk.
+    /// Returns Result.Failure with a list of missing files if any are absent.
+    /// This is BLOCKING — the caller must handle failure (rollback, cleanup).
     /// </summary>
-    private void VerifyCriticalFiles(ComponentDefinition definition)
+    private Result VerifyCriticalFiles(ComponentDefinition definition)
     {
+        var missingFiles = new List<string>();
+
         foreach (var file in definition.GameFiles)
         {
             var path = Path.Combine(_gameDir!, file.TrimEnd('/', '\\'));
             if (file.EndsWith('/') || file.EndsWith('\\'))
             {
                 if (!Directory.Exists(path))
-                    ConsoleUI.ShowWarning(Loc.T("warn.av_blocked_dir", file));
+                    missingFiles.Add(file);
             }
             else
             {
                 if (!File.Exists(path))
-                    ConsoleUI.ShowWarning(Loc.T("warn.av_blocked_file", file));
+                    missingFiles.Add(file);
             }
         }
+
+        if (missingFiles.Count == 0)
+            return Result.Success();
+
+        var error = $"Critical files missing ({missingFiles.Count}):\n" +
+                    string.Join("\n", missingFiles.Select(f => $"  • {f}"));
+
+        return Result.Failure(error);
     }
 
     private static string FormatSize(long bytes)

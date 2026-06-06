@@ -42,6 +42,9 @@ public class LauncherConfig
 
     [JsonPropertyName("launcherRepo")]
     public LauncherRepoInfo? LauncherRepo { get; set; }
+
+    [JsonPropertyName("githubToken")]
+    public string? GitHubToken { get; set; }
 }
 
 /// <summary>

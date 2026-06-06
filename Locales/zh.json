@@ -108,6 +108,8 @@
   "info.incomplete_detected": "发现 {0} 个组件安装不完整，建议更新修复",
   "info.installable": "有 {0} 个组件可安装",
   "info.all_latest": "所有组件均为最新版本",
+  "info.check_failed": "{0} 个组件无法检查更新（可能网络问题）",
+  "info.corrupted_detected": "{0} 个组件可能已损坏 — 建议修复",
   "info.wait_return": "按任意键返回主菜单...",
 
   "component.not_installed": "未安装",

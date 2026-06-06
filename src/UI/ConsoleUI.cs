@@ -139,12 +139,20 @@ public static class ConsoleUI
     }
 
     /// <summary>
-    /// Read a key from console input, safely handling redirected input.
+    /// Read a key from console input.
+    /// When stdin is piped, falls back to reading a line so automated testing works.
     /// </summary>
     public static ConsoleKeyInfo? TryReadKey(bool intercept = true)
     {
         try { return Console.ReadKey(intercept); }
-        catch (InvalidOperationException) { return null; }
+        catch (InvalidOperationException)
+        {
+            // Console is redirected (piped input) — read from stdin
+            var line = Console.ReadLine();
+            if (!string.IsNullOrEmpty(line))
+                return new ConsoleKeyInfo(line[0], (ConsoleKey)line[0], false, false, false);
+            return null;
+        }
     }
 
     public static void WaitForKey()

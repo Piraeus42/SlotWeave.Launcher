@@ -1,11 +1,14 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Xml.Linq;
 using SlotWeave.Launcher.Models;
 
 namespace SlotWeave.Launcher.Services;
 
 /// <summary>
 /// Handles all GitHub API communication for checking releases and downloading assets.
+/// Version checks use the releases Atom feed (no rate limit, no auth).
+/// Asset lookups use the REST API (only when an update is actually performed).
 /// </summary>
 public class GitHubService
 {
@@ -15,14 +18,86 @@ public class GitHubService
         PropertyNameCaseInsensitive = true
     };
 
-    public GitHubService(HttpClient http)
+    // Atom feed XML namespace
+    private static readonly XNamespace AtomNs = "http://www.w3.org/2005/Atom";
+
+    public GitHubService(HttpClient http, string? token = null)
     {
         _http = http;
         _http.DefaultRequestHeaders.Add("User-Agent", "SlotWeave.Launcher/1.0");
         _http.DefaultRequestHeaders.Add("Accept", "application/vnd.github+json");
         _http.Timeout = TimeSpan.FromSeconds(30);
+
+        // Authenticated requests get 5000/hr vs 60/hr unauthenticated.
+        // Token is only needed when performing actual downloads (API asset lookup).
+        token ??= Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+        if (!string.IsNullOrWhiteSpace(token))
+            _http.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
     }
 
+    // ── Version check (Atom feed — zero rate limit) ────────────────
+
+    /// <summary>
+    /// Get the latest release version via the Atom feed.
+    /// No API rate limit, no authentication required.
+    /// Returns null if the feed can't be fetched or parsed.
+    /// </summary>
+    public async Task<string?> GetLatestVersionAsync(string owner, string repo)
+    {
+        try
+        {
+            var atomUrl = $"https://github.com/{owner}/{repo}/releases.atom";
+            var xml = await _http.GetStringAsync(atomUrl);
+            var doc = XDocument.Parse(xml);
+
+            foreach (var entry in doc.Descendants(AtomNs + "entry"))
+            {
+                // Extract tag from <link> href: …/releases/tag/v1.0.3
+                var link = entry.Element(AtomNs + "link");
+                var href = link?.Attribute("href")?.Value ?? "";
+                var tagPrefix = $"/{owner}/{repo}/releases/tag/";
+                var idx = href.IndexOf(tagPrefix, StringComparison.OrdinalIgnoreCase);
+                if (idx < 0) continue;
+
+                var tag = href[(idx + tagPrefix.Length)..];
+                // URL-decode in case tag contains special chars
+                tag = Uri.UnescapeDataString(tag);
+
+                // Skip prerelease-looking tags (semver: X.Y.Z-suffix)
+                var version = tag.StartsWith('v') ? tag[1..] : tag;
+                if (LooksLikePrerelease(version))
+                    continue;
+
+                return version;
+            }
+        }
+        catch
+        {
+            // Fall through to API fallback
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Heuristic: semver prereleases have a hyphen after the numeric part.
+    /// e.g. "1.0.3-beta1", "2.0.0-rc.1", "1.0.0-alpha"
+    /// </summary>
+    private static bool LooksLikePrerelease(string version)
+    {
+        // Matches X.Y.Z-anything
+        return System.Text.RegularExpressions.Regex.IsMatch(
+            version, @"^\d+\.\d+\.\d+-");
+    }
+
+    // ── Full release info (REST API — 1 call per update) ──────────
+
+    /// <summary>
+    /// Fetch the full latest release from the REST API, including assets.
+    /// This consumes 1 API request. Only call this when an update is
+    /// actually being performed, not for routine version checks.
+    /// </summary>
     public async Task<GitHubRelease?> GetLatestReleaseAsync(string owner, string repo)
     {
         try
@@ -51,6 +126,8 @@ public class GitHubService
         }
     }
 
+    // ── Asset matching ────────────────────────────────────────────
+
     public GitHubAsset? FindMatchingAsset(GitHubRelease release, string assetPattern)
     {
         if (release.Assets.Count == 0)
@@ -66,8 +143,11 @@ public class GitHubService
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         return release.Assets.FirstOrDefault(a => regex.IsMatch(a.Name))
+            ?? release.Assets.FirstOrDefault(a => a.Name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
             ?? release.Assets.FirstOrDefault(a => a.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
     }
+
+    // ── Download ──────────────────────────────────────────────────
 
     public async Task<bool> DownloadAssetAsync(
         string downloadUrl,

@@ -56,7 +56,7 @@ class Program
             using var httpClient = new HttpClient();
             httpClient.Timeout = TimeSpan.FromSeconds(config.DownloadTimeoutSeconds);
 
-            var githubService = new GitHubService(httpClient);
+            var githubService = new GitHubService(httpClient, config.GitHubToken);
             var detector = new GameDetector(config, exeDir);
             var scanner = new ComponentScanner(config);
             var cacheManager = new CacheManager(config);
@@ -314,8 +314,9 @@ class Program
             {
                 Owner = "Piraeus42",
                 Repo = "SlotWeave.Launcher",
-                AssetPattern = "SlotWeave.Launcher.exe"
-            }
+                AssetPattern = "SlotWeave*.exe"
+            },
+            GitHubToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN")
         };
     }
 

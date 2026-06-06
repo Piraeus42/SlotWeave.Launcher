@@ -108,6 +108,8 @@
   "info.incomplete_detected": "{0} component(s) incomplete — update to repair",
   "info.installable": "{0} component(s) available to install",
   "info.all_latest": "All components are up to date",
+  "info.check_failed": "{0} component(s) could not check for updates",
+  "info.corrupted_detected": "{0} component(s) may be corrupted — repair recommended",
   "info.wait_return": "Press any key to return to main menu...",
 
   "component.not_installed": "Not installed",

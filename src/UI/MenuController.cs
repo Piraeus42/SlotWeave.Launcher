@@ -135,34 +135,60 @@ public class MenuController
     {
         ConsoleUI.ShowInfo(Loc.T("status.checking_updates"));
 
+        // Version check via Atom feed — zero API calls, zero rate limit.
+        // The full release (with asset download URL) is fetched later,
+        // only when the user actually selects a component to install/update.
         var tasks = _components.Select(async comp =>
         {
-            var release = await _github.GetLatestReleaseAsync(
+            var version = await _github.GetLatestVersionAsync(
                 comp.Definition.Owner, comp.Definition.Repo);
 
-            if (release != null)
+            if (version != null)
             {
-                comp.LatestVersion = release.Version;
-                comp.DownloadUrl = _github.FindMatchingAsset(release,
-                    comp.Definition.AssetPattern)?.BrowserDownloadUrl;
-                comp.DownloadSize = _github.FindMatchingAsset(release,
-                    comp.Definition.AssetPattern)?.Size ?? 0;
+                comp.LatestVersion = version;
+                comp.LatestVersionCheckFailed = false;
+
+                // State transition: if installed and remote is newer → UpdateAvailable
+                if (comp.State == ComponentState.Installed
+                    && comp.InstalledVersion != null
+                    && comp.InstalledVersion != version)
+                {
+                    comp.TransitionTo(ComponentState.UpdateAvailable);
+                }
+                // State transition: was update-available, but now same version →
+                // GitHub release was deleted/reverted
+                else if (comp.State == ComponentState.UpdateAvailable
+                    && comp.InstalledVersion == version)
+                {
+                    comp.TransitionTo(ComponentState.Installed);
+                }
+            }
+            else
+            {
+                comp.LatestVersionCheckFailed = true;
             }
         });
 
         await Task.WhenAll(tasks);
 
-        var updateCount = _components.Count(c => c.HasUpdate);
-        var partialCount = _components.Count(c => c.IsPartial);
-        var newCount = _components.Count(c => !c.IsInstalled && !c.IsPartial);
+        // Count by explicit state (per final.md §2.3)
+        var updateCount = _components.Count(c => c.State == ComponentState.UpdateAvailable);
+        var partialCount = _components.Count(c => c.State == ComponentState.PartialInstall);
+        var corruptedCount = _components.Count(c => c.State == ComponentState.Corrupted);
+        var newCount = _components.Count(c => c.State == ComponentState.NotInstalled);
+        var checkFailedCount = _components.Count(c => c.LatestVersionCheckFailed);
 
+        if (checkFailedCount > 0)
+            ConsoleUI.ShowWarning(Loc.T("info.check_failed", checkFailedCount));
+        if (corruptedCount > 0)
+            ConsoleUI.ShowError(Loc.T("info.corrupted_detected", corruptedCount));
         if (partialCount > 0)
             ConsoleUI.ShowWarning(Loc.T("info.incomplete_detected", partialCount));
         if (updateCount > 0)
             ConsoleUI.ShowWarning(Loc.T("info.updates_available", updateCount));
         else if (newCount > 0)
             ConsoleUI.ShowInfo(Loc.T("info.installable", newCount));
-        else if (updateCount == 0 && partialCount == 0)
+        else if (updateCount == 0 && partialCount == 0 && corruptedCount == 0)
             ConsoleUI.ShowSuccess(Loc.T("info.all_latest"));
     }
 
@@ -385,7 +411,7 @@ public class MenuController
                 var success = await _installer.InstallOrUpdateAsync(component, release, _cts?.Token ?? default);
                 if (success)
                 {
-                    RefreshComponentState(component);
+                    await RefreshComponentStateAsync(component);
                 }
                 break;
 
@@ -393,7 +419,7 @@ public class MenuController
                 var uninstalled = _uninstaller.Uninstall(component);
                 if (uninstalled)
                 {
-                    RefreshComponentState(component);
+                    await RefreshComponentStateAsync(component);
                 }
                 break;
         }
@@ -430,7 +456,7 @@ public class MenuController
             if (success)
             {
                 succeeded++;
-                RefreshComponentState(comp);
+                await RefreshComponentStateAsync(comp);
             }
             else
             {
@@ -447,19 +473,28 @@ public class MenuController
             ConsoleUI.ShowError(Loc.T("result.fail_count", failed));
     }
 
-    private void RefreshComponentState(InstalledComponent component)
+    private async Task RefreshComponentStateAsync(InstalledComponent component)
     {
         if (_gameDir == null) return;
 
-        var fresh = _scanner.ScanAll();
-        var updated = fresh.FirstOrDefault(c =>
-            c.Definition.Id == component.Definition.Id);
+        // Re-scan the component's actual on-disk state (O(1) file I/O for this component only)
+        var fresh = _scanner.ScanOne(component.Definition, _gameDir);
 
-        if (updated != null)
+        // Apply scanner-authoritative state to the live component
+        component.SetStateFromScan(fresh.State);
+        component.UpdateInstalledVersion(fresh.InstalledVersion);
+
+        // Re-fetch latest version from GitHub so status is immediately correct
+        var version = await _github.GetLatestVersionAsync(
+            component.Definition.Owner, component.Definition.Repo);
+        if (version != null)
         {
-            component.IsInstalled = updated.IsInstalled;
-            component.InstalledVersion = updated.InstalledVersion;
-            component.LatestVersion = null;
+            component.LatestVersion = version;
+            component.LatestVersionCheckFailed = false;
+        }
+        else
+        {
+            component.LatestVersionCheckFailed = true;
         }
     }
 

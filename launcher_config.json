@@ -48,5 +48,6 @@
     "owner": "Piraeus42",
     "repo": "SlotWeave.Launcher",
     "assetPattern": "SlotWeave.Launcher.exe"
-  }
+  },
+  "githubToken": null
 }

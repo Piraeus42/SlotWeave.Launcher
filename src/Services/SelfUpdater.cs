@@ -5,7 +5,8 @@ using SlotWeave.Launcher.Models;
 namespace SlotWeave.Launcher.Services;
 
 /// <summary>
-/// Checks for launcher updates from GitHub and performs self-update via batch file stager.
+/// Checks for launcher updates from GitHub (Atom feed, no rate limit)
+/// and performs self-update via rename-based atomic swap.
 /// </summary>
 public class SelfUpdater
 {
@@ -14,7 +15,9 @@ public class SelfUpdater
     private readonly string _launcherDir;
     private string? _latestVersion;
     private string? _downloadUrl;
+    private string? _assetDigest;
     private bool _checked;
+    private bool _urlResolved;
 
     public SelfUpdater(GitHubService github, LauncherConfig config, string launcherDir)
     {
@@ -28,6 +31,7 @@ public class SelfUpdater
 
     /// <summary>
     /// Check GitHub for a newer launcher release.
+    /// Uses Atom feed — zero API calls, zero rate limit.
     /// Returns true if an update is available.
     /// </summary>
     public async Task<bool> CheckAsync()
@@ -37,34 +41,28 @@ public class SelfUpdater
         if (_config.LauncherRepo == null)
             return false;
 
-        var release = await _github.GetLatestReleaseAsync(
+        // Atom feed for version-only check (no rate limit)
+        var remoteVersion = await _github.GetLatestVersionAsync(
             _config.LauncherRepo.Owner, _config.LauncherRepo.Repo);
 
-        if (release == null)
+        if (remoteVersion == null)
             return false;
 
-        var remoteVersion = release.Version;
         if (!IsNewer(remoteVersion, _config.LauncherVersion))
             return false;
 
-        var asset = _github.FindMatchingAsset(release, _config.LauncherRepo.AssetPattern);
-        if (asset == null)
-            return false;
-
         _latestVersion = remoteVersion;
-        _downloadUrl = asset.BrowserDownloadUrl;
+        _urlResolved = false; // download URL resolved lazily on actual update
         return true;
     }
 
     /// <summary>
     /// Download the new launcher and replace the current exe via rename-based atomic swap.
-    /// Windows allows renaming a running .exe (but not deleting/overwriting it),
-    /// so we rename current→.old, then rename .new→current, with rollback on failure.
     /// This method never returns — it exits the process after starting the new exe.
     /// </summary>
     public async Task<bool> UpdateAsync()
     {
-        if (_downloadUrl == null)
+        if (_latestVersion == null)
             return false;
 
         ConsoleUI.ShowHeader(Loc.T("selfupdate.updating"));
@@ -80,10 +78,22 @@ public class SelfUpdater
         var oldExe = currentExe + ".old";
         var exeDir = Path.GetDirectoryName(currentExe) ?? ".";
 
+        // Resolve download URL (1 API call — only when actually updating)
+        if (!_urlResolved)
+        {
+            _downloadUrl = await ResolveDownloadUrlAsync();
+            _urlResolved = true;
+            if (_downloadUrl == null)
+            {
+                ConsoleUI.ShowError(Loc.T("error.no_release_asset", _latestVersion));
+                return false;
+            }
+        }
+
         // Step 1 — Download new exe to .new
         Console.Write(Loc.T("status.downloading") + " ");
         var success = await _github.DownloadAssetAsync(
-            _downloadUrl,
+            _downloadUrl!,
             newExe,
             (received, total) =>
             {
@@ -113,21 +123,44 @@ public class SelfUpdater
         Console.WriteLine();
         ConsoleUI.ShowSuccess(Loc.T("selfupdate.download_ok"));
 
-        // Step 1.5 — Persist the new version to config NOW, before swapping.
-        // If we don't, the new exe reads the stale config version and
-        // immediately offers another "update" for the same release.
-        _config.LauncherVersion = _latestVersion!;
-        TrySaveConfigVersion();
+        // Step 1.5 — Verify downloaded exe (PE header + optional SHA256)
+        Console.Write("Verifying... ");
+        var peVerifier = new Verification.PeHeaderVerifier();
+        var peResult = await peVerifier.VerifyAsync(newExe);
+        if (!peResult.IsSuccess)
+        {
+            Console.WriteLine();
+            ConsoleUI.ShowError($"Download verification failed: {peResult.Error}");
+            TryDelete(newExe);
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(_assetDigest))
+        {
+            var shaVerifier = new Verification.Sha256Verifier();
+            var shaResult = await shaVerifier.VerifyAsync(newExe, _assetDigest);
+            if (!shaResult.IsSuccess)
+            {
+                Console.WriteLine();
+                ConsoleUI.ShowError($"Hash verification failed: {shaResult.Error}");
+                TryDelete(newExe);
+                return false;
+            }
+        }
+        ConsoleUI.ShowSuccess("Verified");
+
+        // Step 1.6 — Config transaction (commit only after successful swap)
+        var configPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "SlotWeave.Launcher", "launcher_config.json");
+        var tx = new ConfigTransaction(configPath, _config);
+        tx.Update(c => c.LauncherVersion = _latestVersion!);
 
         ConsoleUI.ShowInfo(Loc.T("selfupdate.restarting"));
 
         // Step 2 — Atomic replacement via rename trick.
-        // On Windows a running .exe CAN be renamed (not deleted/overwritten).
-        // Sequence: delete stale .old → rename current→.old → rename .new→current.
-        // If the final rename fails, roll back .old→current.
         try
         {
-            // Clean up leftover .old from a previous successful update
             TryDelete(oldExe);
         }
         catch { /* best effort */ }
@@ -140,6 +173,7 @@ public class SelfUpdater
         {
             ConsoleUI.ShowError(Loc.T("selfupdate.rename_failed", ex.Message));
             TryDelete(newExe);
+            tx.Abort();
             return false;
         }
 
@@ -149,13 +183,16 @@ public class SelfUpdater
         }
         catch (Exception ex)
         {
-            // Rollback: put the old exe back in place
             ConsoleUI.ShowError(Loc.T("selfupdate.replace_failed", ex.Message));
             try { File.Move(oldExe, currentExe); }
-            catch { /* if rollback also fails, user needs to restore manually */ }
+            catch { }
             TryDelete(newExe);
+            tx.Abort();
             return false;
         }
+
+        // Only persist config if the swap succeeded
+        tx.Commit();
 
         // Step 3 — Start the new exe and exit
         try
@@ -173,33 +210,29 @@ public class SelfUpdater
         }
 
         Environment.Exit(0);
-        return true; // unreachable
+        return true;
     }
 
     /// <summary>
-    /// Save the updated launcher version to the APPDATA config file
-    /// so the incoming exe doesn't see itself as outdated.
+    /// Resolve the download URL for the launcher asset.
+    /// Makes 1 API call — only invoked when the user actually clicks update.
     /// </summary>
-    private void TrySaveConfigVersion()
+    private async Task<string?> ResolveDownloadUrlAsync()
     {
-        try
+        if (_config.LauncherRepo == null) return null;
+
+        var release = await _github.GetLatestReleaseAsync(
+            _config.LauncherRepo.Owner, _config.LauncherRepo.Repo);
+        if (release == null) return null;
+
+        var asset = _github.FindMatchingAsset(release, _config.LauncherRepo.AssetPattern);
+        if (asset != null)
         {
-            var dataDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "SlotWeave.Launcher");
-            var configPath = Path.Combine(dataDir, "launcher_config.json");
-            if (!File.Exists(configPath)) return;
-
-            var json = File.ReadAllText(configPath);
-            var config = JsonSerializer.Deserialize<LauncherConfig>(json,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            if (config == null) return;
-
-            config.LauncherVersion = _latestVersion!;
-            File.WriteAllText(configPath,
-                JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }));
+            _assetDigest = asset.Digest;
+            return asset.BrowserDownloadUrl;
         }
-        catch { /* best effort — new exe will handle version sync on its first config save */ }
+
+        return null;
     }
 
     /// <summary>

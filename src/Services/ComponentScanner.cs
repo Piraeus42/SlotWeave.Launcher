@@ -25,24 +25,79 @@ public class ComponentScanner
         _gameDir = gameDir;
     }
 
+    // ── Public scan API ────────────────────────────────────────
+
     /// <summary>
-    /// Scan all configured repositories and return their installation state.
+    /// Scan a single component (optimised: only stats the target component's files).
+    /// </summary>
+    public InstalledComponent ScanOne(ComponentDefinition definition, string gameDir)
+    {
+        var component = new InstalledComponent(definition);
+
+        var installDir = Path.Combine(gameDir, definition.InstallPath);
+        var installDirExists = Directory.Exists(installDir);
+
+        var gameFiles = definition.GameFiles
+            .Select(f => Path.Combine(gameDir, f))
+            .ToList();
+
+        var existingFiles = gameFiles.Where(f => File.Exists(f) || Directory.Exists(f)).ToList();
+
+        // State determination
+        ComponentState scannedState;
+
+        if (!installDirExists && existingFiles.Count == 0)
+        {
+            // Nothing installed
+            scannedState = ComponentState.NotInstalled;
+        }
+        else if (installDirExists && existingFiles.Count == gameFiles.Count)
+        {
+            // Directory exists and all files present → installed
+            scannedState = ComponentState.Installed;
+        }
+        else
+        {
+            // Some files exist → partial / incomplete
+            // Corrupted detection (hash mismatch) is left to the post-extraction
+            // verification step, not the scanner.
+            scannedState = ComponentState.PartialInstall;
+        }
+
+        component.SetStateFromScan(scannedState);
+
+        // Read installed version if anything is present
+        if (scannedState != ComponentState.NotInstalled)
+        {
+            var version = ReadInstalledVersion(definition, gameDir);
+            component.UpdateInstalledVersion(version);
+        }
+
+        return component;
+    }
+
+    /// <summary>
+    /// Scan all configured components.
+    /// </summary>
+    public List<InstalledComponent> ScanAll(IEnumerable<ComponentDefinition> definitions, string gameDir)
+    {
+        return definitions
+            .Select(def => ScanOne(def, gameDir))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Scan all configured repositories (backward-compat overload).
     /// </summary>
     public List<InstalledComponent> ScanAll()
     {
         if (_gameDir == null)
             throw new InvalidOperationException("Game directory not set. Call SetGameDirectory first.");
 
-        var results = new List<InstalledComponent>();
-
-        foreach (var repo in _config.Repositories)
-        {
-            var installed = ScanComponent(repo);
-            results.Add(installed);
-        }
-
-        return results;
+        return ScanAll(_config.Repositories, _gameDir);
     }
+
+    // ── Legacy GDWeave detection ────────────────────────────────
 
     /// <summary>
     /// Check for legacy GDWeave installation (pre-SlotWeave fork).
@@ -97,70 +152,41 @@ public class ComponentScanner
         return ok;
     }
 
+    // ── Version I/O ─────────────────────────────────────────────
+
     /// <summary>
-    /// Scan a single component for its installation state and version.
+    /// Write a version marker file after successful install/update.
     /// </summary>
-    private InstalledComponent ScanComponent(ComponentDefinition definition)
+    public void WriteVersionMarker(ComponentDefinition definition, string version)
     {
-        var result = new InstalledComponent
-        {
-            Definition = definition,
-            IsInstalled = false,
-            InstalledVersion = null
-        };
+        if (_gameDir == null) return;
 
-        // Check if the installation directory exists
-        var installDir = Path.Combine(_gameDir!, definition.InstallPath);
-        if (!Directory.Exists(installDir))
+        var versionPath = Path.Combine(_gameDir, definition.ManifestFile);
+        try
         {
-            if (definition.GameFiles.Count > 0)
-            {
-                var fileChecks = definition.GameFiles.Select(f =>
-                    File.Exists(Path.Combine(_gameDir!, f)) ||
-                    Directory.Exists(Path.Combine(_gameDir!, f))).ToList();
+            var dir = Path.GetDirectoryName(versionPath);
+            if (dir != null && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
 
-                if (fileChecks.All(x => x))
-                {
-                    // All game files exist — fully installed
-                }
-                else if (fileChecks.Any(x => x))
-                {
-                    // Some files exist but not all — incomplete install
-                    result.IsPartial = true;
-                    return result;
-                }
-                else
-                {
-                    return result;
-                }
-            }
-            else
-            {
-                return result;
-            }
+            var json = $"{{\"version\": \"{version}\"}}";
+            File.WriteAllText(versionPath, json);
         }
-
-        result.IsInstalled = true;
-
-        // Try to read installed version
-        result.InstalledVersion = ReadInstalledVersion(definition);
-
-        return result;
+        catch (Exception ex)
+        {
+            ConsoleUI.ShowError(Loc.T("error.version_write_failed", ex.Message));
+        }
     }
 
     /// <summary>
     /// Read the installed version of a component using the configured manifest file.
-    /// Priority:
-    /// 1. manifest.json (for mods) → Metadata.Version
-    /// 2. version.txt (for core) → first line
-    /// 3. DLL AssemblyVersion (fallback)
+    /// Overload that accepts explicit game directory (for ScanOne).
     /// </summary>
-    private string? ReadInstalledVersion(ComponentDefinition definition)
+    private string? ReadInstalledVersion(ComponentDefinition definition, string gameDir)
     {
         // Strategy 1: version.json or manifest.json
         if (definition.ManifestFile.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
         {
-            var manifestPath = Path.Combine(_gameDir!, definition.ManifestFile);
+            var manifestPath = Path.Combine(gameDir, definition.ManifestFile);
             if (File.Exists(manifestPath))
             {
                 try
@@ -168,15 +194,12 @@ public class ComponentScanner
                     var json = File.ReadAllText(manifestPath);
                     using var doc = JsonDocument.Parse(json);
 
-                    // Try simple "version" field first (version.json format, lowercase)
                     if (TryGetJsonProperty(doc.RootElement, "version", out var v))
                         return v;
 
-                    // Try "Version" (PascalCase)
                     if (TryGetJsonProperty(doc.RootElement, "Version", out var v2))
                         return v2;
 
-                    // Try Metadata.Version (mod manifest.json format)
                     if (doc.RootElement.TryGetProperty("Metadata", out var metadata) &&
                         metadata.TryGetProperty("Version", out var version))
                     {
@@ -190,10 +213,10 @@ public class ComponentScanner
             }
         }
 
-        // Strategy 2: version.txt (plain text, first line is version)
+        // Strategy 2: version.txt
         if (definition.ManifestFile.EndsWith(".txt", StringComparison.OrdinalIgnoreCase))
         {
-            var versionPath = Path.Combine(_gameDir!, definition.ManifestFile);
+            var versionPath = Path.Combine(gameDir, definition.ManifestFile);
             if (File.Exists(versionPath))
             {
                 try
@@ -216,11 +239,10 @@ public class ComponentScanner
         // Strategy 3: DLL AssemblyVersion
         if (definition.IsCore)
         {
-            // Try multiple candidate DLL paths for core assembly
             var candidateDllPaths = new[]
             {
-                Path.Combine(_gameDir!, definition.InstallPath, "core", "SlotWeave.dll"),
-                Path.Combine(_gameDir!, definition.InstallPath, "SlotWeave.dll"),
+                Path.Combine(gameDir, definition.InstallPath, "core", "SlotWeave.dll"),
+                Path.Combine(gameDir, definition.InstallPath, "SlotWeave.dll"),
             };
 
             foreach (var dllPath in candidateDllPaths)
@@ -242,8 +264,7 @@ public class ComponentScanner
         }
         else
         {
-            // Try to find DLL in mod directory
-            var modDir = Path.Combine(_gameDir!, definition.InstallPath);
+            var modDir = Path.Combine(gameDir, definition.InstallPath);
             if (Directory.Exists(modDir))
             {
                 try
@@ -274,34 +295,8 @@ public class ComponentScanner
         return null;
     }
 
-    /// <summary>
-    /// Write a version.txt file after successful install/update.
-    /// </summary>
-    public void WriteVersionMarker(ComponentDefinition definition, string version)
-    {
-        if (_gameDir == null) return;
+    // ── Helpers ─────────────────────────────────────────────────
 
-        var versionPath = Path.Combine(_gameDir, definition.ManifestFile);
-        try
-        {
-            var dir = Path.GetDirectoryName(versionPath);
-            if (dir != null && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
-
-            // Write a proper version.json (zip already includes this,
-            // but write it as a fallback in case extraction didn't include it)
-            var json = $"{{\"version\": \"{version}\"}}";
-            File.WriteAllText(versionPath, json);
-        }
-        catch (Exception ex)
-        {
-            ConsoleUI.ShowError(Loc.T("error.version_write_failed", ex.Message));
-        }
-    }
-
-    /// <summary>
-    /// Try to read a string property from a JSON element, case-insensitive.
-    /// </summary>
     private static bool TryGetJsonProperty(
         System.Text.Json.JsonElement element, string propertyName, out string? value)
     {
