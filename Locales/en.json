@@ -126,6 +126,9 @@
   "selfupdate.download_ok": "Download complete, switching",
   "selfupdate.download_failed": "Update download failed",
   "selfupdate.restarting": "Closing and applying update...",
+  "selfupdate.rename_failed": "Failed to rename running executable: {0}",
+  "selfupdate.replace_failed": "Failed to install new version: {0}",
+  "selfupdate.manual_restart": "Please restart the launcher manually.",
   "selfupdate.manual": "Auto-update failed. Please manually replace {0} -> {1}",
 
   "gdweave.detected": "Legacy GDWeave test framework detected — removal recommended",

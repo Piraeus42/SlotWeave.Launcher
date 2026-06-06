@@ -57,8 +57,10 @@ public class SelfUpdater
     }
 
     /// <summary>
-    /// Download the new launcher and launch the update stager.
-    /// This method never returns — it exits the process after launching the batch file.
+    /// Download the new launcher and replace the current exe via rename-based atomic swap.
+    /// Windows allows renaming a running .exe (but not deleting/overwriting it),
+    /// so we rename current→.old, then rename .new→current, with rollback on failure.
+    /// This method never returns — it exits the process after starting the new exe.
     /// </summary>
     public async Task<bool> UpdateAsync()
     {
@@ -67,11 +69,18 @@ public class SelfUpdater
 
         ConsoleUI.ShowHeader(Loc.T("selfupdate.updating"));
 
-        // Download new exe to .new file
-        var currentExe = Environment.ProcessPath ?? Path.Combine(_launcherDir, "SlotWeave.Launcher.exe");
-        var newExe = currentExe + ".new";
-        var batPath = Path.Combine(_launcherDir, "update.bat");
+        var currentExe = Environment.ProcessPath;
+        if (currentExe == null)
+        {
+            ConsoleUI.ShowError("Cannot determine current executable path.");
+            return false;
+        }
 
+        var newExe = currentExe + ".new";
+        var oldExe = currentExe + ".old";
+        var exeDir = Path.GetDirectoryName(currentExe) ?? ".";
+
+        // Step 1 — Download new exe to .new
         Console.Write(Loc.T("status.downloading") + " ");
         var success = await _github.DownloadAssetAsync(
             _downloadUrl,
@@ -103,26 +112,64 @@ public class SelfUpdater
 
         Console.WriteLine();
         ConsoleUI.ShowSuccess(Loc.T("selfupdate.download_ok"));
+
+        // Step 1.5 — Persist the new version to config NOW, before swapping.
+        // If we don't, the new exe reads the stale config version and
+        // immediately offers another "update" for the same release.
+        _config.LauncherVersion = _latestVersion!;
+        TrySaveConfigVersion();
+
         ConsoleUI.ShowInfo(Loc.T("selfupdate.restarting"));
 
-        // Write the batch stager script
-        WriteUpdateBatch(batPath, currentExe, newExe);
+        // Step 2 — Atomic replacement via rename trick.
+        // On Windows a running .exe CAN be renamed (not deleted/overwritten).
+        // Sequence: delete stale .old → rename current→.old → rename .new→current.
+        // If the final rename fails, roll back .old→current.
+        try
+        {
+            // Clean up leftover .old from a previous successful update
+            TryDelete(oldExe);
+        }
+        catch { /* best effort */ }
 
-        // Launch the batch file and exit
+        try
+        {
+            File.Move(currentExe, oldExe);
+        }
+        catch (Exception ex)
+        {
+            ConsoleUI.ShowError(Loc.T("selfupdate.rename_failed", ex.Message));
+            TryDelete(newExe);
+            return false;
+        }
+
+        try
+        {
+            File.Move(newExe, currentExe);
+        }
+        catch (Exception ex)
+        {
+            // Rollback: put the old exe back in place
+            ConsoleUI.ShowError(Loc.T("selfupdate.replace_failed", ex.Message));
+            try { File.Move(oldExe, currentExe); }
+            catch { /* if rollback also fails, user needs to restore manually */ }
+            TryDelete(newExe);
+            return false;
+        }
+
+        // Step 3 — Start the new exe and exit
         try
         {
             Process.Start(new ProcessStartInfo
             {
-                FileName = batPath,
-                WorkingDirectory = _launcherDir,
-                UseShellExecute = true,
-                CreateNoWindow = true
+                FileName = currentExe,
+                WorkingDirectory = exeDir,
+                UseShellExecute = true
             });
         }
         catch
         {
-            // Fallback: just tell user to manually replace
-            ConsoleUI.ShowInfo(Loc.T("selfupdate.manual", newExe, currentExe));
+            ConsoleUI.ShowInfo(Loc.T("selfupdate.manual_restart"));
         }
 
         Environment.Exit(0);
@@ -130,26 +177,29 @@ public class SelfUpdater
     }
 
     /// <summary>
-    /// Write the batch stager that replaces the exe and restarts.
+    /// Save the updated launcher version to the APPDATA config file
+    /// so the incoming exe doesn't see itself as outdated.
     /// </summary>
-    private static void WriteUpdateBatch(string batPath, string currentExe, string newExe)
+    private void TrySaveConfigVersion()
     {
-        var script = $"""
-@echo off
-title SlotWeave Launcher Update
-echo Updating SlotWeave Launcher...
-:retry
-timeout /t 1 /nobreak >nul
-del /f /q "{currentExe}" 2>nul
-if exist "{currentExe}" goto retry
-move /y "{newExe}" "{currentExe}" 2>nul
-if exist "{currentExe}" (
-    echo Done.
-    start "" "{currentExe}"
-)
-del /f /q "%~f0" 2>nul
-""";
-        File.WriteAllText(batPath, script, System.Text.Encoding.ASCII);
+        try
+        {
+            var dataDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "SlotWeave.Launcher");
+            var configPath = Path.Combine(dataDir, "launcher_config.json");
+            if (!File.Exists(configPath)) return;
+
+            var json = File.ReadAllText(configPath);
+            var config = JsonSerializer.Deserialize<LauncherConfig>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (config == null) return;
+
+            config.LauncherVersion = _latestVersion!;
+            File.WriteAllText(configPath,
+                JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch { /* best effort — new exe will handle version sync on its first config save */ }
     }
 
     /// <summary>

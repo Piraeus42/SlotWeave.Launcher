@@ -126,6 +126,9 @@
   "selfupdate.download_ok": "下载完成，准备切换",
   "selfupdate.download_failed": "下载更新失败",
   "selfupdate.restarting": "正在关闭并应用更新...",
+  "selfupdate.rename_failed": "无法重命名当前运行程序: {0}",
+  "selfupdate.replace_failed": "安装新版本失败: {0}",
+  "selfupdate.manual_restart": "请手动重启启动器。",
   "selfupdate.manual": "自动更新失败，请手动将 {0} 替换到 {1}",
 
   "gdweave.detected": "检测到旧版 GDWeave 测试框架，建议移除",

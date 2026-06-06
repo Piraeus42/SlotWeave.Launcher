@@ -38,7 +38,7 @@ public class LauncherConfig
     public List<string> DownloadMirrors { get; set; } = new();
 
     [JsonPropertyName("launcherVersion")]
-    public string LauncherVersion { get; set; } = "1.0.0";
+    public string LauncherVersion { get; set; } = "1.0.2";
 
     [JsonPropertyName("launcherRepo")]
     public LauncherRepoInfo? LauncherRepo { get; set; }

@@ -27,6 +27,16 @@ class Program
             var configPath = FindConfigFile();
             var config = LoadConfig(configPath);
 
+            // Sync version from assembly (source of truth) into config.
+            // The APPDATA config may carry a stale version from a previous
+            // installation — the running binary knows its actual version.
+            var asmVersion = GetAssemblyVersion();
+            if (config.LauncherVersion != asmVersion)
+            {
+                config.LauncherVersion = asmVersion;
+                SaveConfig(configPath, config);
+            }
+
             ConsoleUI.SetVersion(config.LauncherVersion);
 
             var exeDir = GetExeDir();
@@ -109,10 +119,8 @@ class Program
     }
 
     /// <summary>
-    /// Find the launcher_config.json file.
-    /// </summary>
-    /// <summary>
-    /// If a .new file exists from a previous self-update, complete the replacement.
+    /// Clean up stale .old files and complete any interrupted .new replacement.
+    /// Uses the same rename-based swap as SelfUpdater — no batch files.
     /// </summary>
     private static void CompletePendingUpdate()
     {
@@ -120,29 +128,58 @@ class Program
         {
             var exePath = Environment.ProcessPath;
             if (exePath == null) return;
+
             var newPath = exePath + ".new";
+            var oldPath = exePath + ".old";
+            var exeDir = Path.GetDirectoryName(exePath) ?? ".";
+
+            // Clean up leftover .old from a previous successful update
+            if (File.Exists(oldPath))
+            {
+                try { File.Delete(oldPath); }
+                catch { /* will retry next launch */ }
+            }
+
+            // If no .new waiting, nothing to complete
             if (!File.Exists(newPath)) return;
 
-            // Delete current exe and rename .new in its place, then restart
-            var batPath = exePath + ".cleanup.bat";
-            var script = $"""
-@echo off
-timeout /t 1 /nobreak >nul
-:retry
-del /f /q "{exePath}" 2>nul
-if exist "{exePath}" goto retry
-move /y "{newPath}" "{exePath}" 2>nul
-start "" "{exePath}"
-del /f /q "%~f0" 2>nul
-""";
-            File.WriteAllText(batPath, script, System.Text.Encoding.ASCII);
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            // A .new is waiting — the previous update didn't finish the swap.
+            // Complete it: rename current→.old, then rename .new→current.
+            try { File.Delete(oldPath); } catch { }
+
+            try
             {
-                FileName = batPath,
-                UseShellExecute = true,
-                CreateNoWindow = true
-            });
-            Environment.Exit(0);
+                File.Move(exePath, oldPath);
+            }
+            catch
+            {
+                // Can't even rename current exe — leave .new for next attempt
+                return;
+            }
+
+            try
+            {
+                File.Move(newPath, exePath);
+            }
+            catch
+            {
+                // Rollback: put original exe back
+                try { File.Move(oldPath, exePath); } catch { }
+                return;
+            }
+
+            // Success — start the new exe
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = exePath,
+                    WorkingDirectory = exeDir,
+                    UseShellExecute = true
+                });
+                Environment.Exit(0);
+            }
+            catch { /* user will restart manually */ }
         }
         catch { /* best effort */ }
     }
@@ -272,7 +309,7 @@ del /f /q "%~f0" 2>nul
                 "https://ghproxy.com/",
                 "https://mirror.ghproxy.com/"
             },
-            LauncherVersion = "1.0.0",
+            LauncherVersion = GetAssemblyVersion(),
             LauncherRepo = new LauncherRepoInfo
             {
                 Owner = "Piraeus42",
@@ -280,5 +317,31 @@ del /f /q "%~f0" 2>nul
                 AssetPattern = "SlotWeave.Launcher.exe"
             }
         };
+    }
+
+    /// <summary>
+    /// Read version from the assembly (matches csproj &lt;Version&gt;).
+    /// Returns "0.0.0" if unreadable.
+    /// </summary>
+    private static string GetAssemblyVersion()
+    {
+        try
+        {
+            var attr = typeof(Program).Assembly
+                .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false);
+            if (attr.Length > 0)
+            {
+                var ver = ((System.Reflection.AssemblyInformationalVersionAttribute)attr[0]).InformationalVersion;
+                // Strip "+" suffix (semver build metadata) if present
+                var plus = ver.IndexOf('+');
+                return plus > 0 ? ver[..plus] : ver;
+            }
+
+            var asmVer = typeof(Program).Assembly.GetName().Version;
+            if (asmVer != null)
+                return $"{asmVer.Major}.{asmVer.Minor}.{asmVer.Build}";
+        }
+        catch { }
+        return "0.0.0";
     }
 }
